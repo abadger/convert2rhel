@@ -20,6 +20,13 @@ import logging
 import os
 import re
 
+
+# This is pipes.quote in Python-2 and shlex.quote in Python-3
+try:
+    from shlex import quote as shlex_quote
+except ImportError:
+    from pipes import quote as shlex_quote
+
 import rpm
 
 from convert2rhel import pkgmanager, utils
@@ -41,7 +48,7 @@ versionlock_file = utils.RestorableFile(_VERSIONLOCK_FILE_PATH)  # pylint: disab
 #
 
 # This regex finds package NEVRs + arch (name epoch version release and
-# architechture) in a string.  Note that the regex requires at least two dashes but the
+# architecture) in a string.  Note that the regex requires at least two dashes but the
 # NEVR can contain more than that.  For instance: gcc-c++-4.8.5-44.0.3.el7.x86_64
 PKG_NEVR = r"\b(?:([0-9]+):)?(\S+)-(\S+)-(\S+)\b"
 
@@ -204,13 +211,53 @@ def get_problematic_pkgs(output, excluded_pkgs=frozenset()):
     #
     # We can fix this with another yum or rpm call.  This rpm command line will print the package name:
     #   rpm -q --whatprovides "CAPABILITY"
-    package_name_re = r"([a-z][a-z0-9-]*)"
-    req = re.findall("Requires: %s" % package_name_re, output, re.MULTILINE)
-    if req:
-        loggerinst.info("Unavailable packages required by others: %s" % set(req))
-        problematic_pkgs["required"] = set(req) - excluded_pkgs
+    capability_re = r"(.*$)"
+    capabilities = re.findall("\WRequires: %s" % capability_re, output, re.MULTILINE)
+    # Uniqify so we don't call yum more than necessary
+    capabilities = frozenset(capabilities)
+
+    requires = set()
+    for req in capabilities:
+        try:
+            pkg_names = get_pkg_names_from_requirement(req)
+        except KeyError:
+            # If we didn't find a package name for the capability, log and skip it.
+            # yum distro-sync skips things that are not package names so we're just recreating what
+            # we had before.
+            loggerinst.warning("Unable to find which package provides %s", req)
+            continue
+
+        if len(pkg_names) > 1:
+            installed_pkgs = set()
+            for name in pkg_names:
+                # FIXME: If multiple pkg_names, select only those that are installed
+                if system_info.is_rpm_installed(name):
+                    loggerinst.warning("None of the rpms that yum thinks provide `%s` are" " installed", req)
+                    installed_pkgs.add(name)
+            # Note: If we don't detect *any* of the pkgs are installed, we give yum the names of all
+            # the pkgs and let it sort out what is needed on the next recursive call.
+            if installed_pkgs:
+                pkg_names = installed_pkgs
+        requires.update(pkg_names)
+
+    if requires:
+        loggerinst.info("Unavailable packages required by others: %s" % requires)
+        problematic_pkgs["required"] = requires - excluded_pkgs
 
     return problematic_pkgs
+
+
+def get_pkg_names_from_requirement(requirement):
+    """Lookup the package names which provide a requirement string.
+
+    .. note:: There may be more than one.
+    """
+    provides_output, ret_code = call_yum_cmd("whatprovides", args=shlex_quote(requirement))
+    if ret_code != 0:
+        raise KeyError("Unable to resolve requirement into a package name")
+    pkg_names = find_pkg_names(provides_output, message_key="%s:")
+
+    return pkg_names
 
 
 def find_pkg_names(output, message_key="%s"):
