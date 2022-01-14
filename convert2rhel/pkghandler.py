@@ -40,10 +40,15 @@ versionlock_file = utils.RestorableFile(_VERSIONLOCK_FILE_PATH)  # pylint: disab
 # Regular expressions used to find package names in yum output
 #
 
-# This regex finds package NEVRs + arch (name epoch version release and
-# architechture) in a string.  Note that the regex requires at least two dashes but the
-# NEVR can contain more than that.  For instance: gcc-c++-4.8.5-44.0.3.el7.x86_64
+#: Regex to find package NEVRs + arch (name epoch version release and
+#: architecture) in a string.  Note that the regex requires at least two dashes but the
+#: NEVR can contain more than that.  For instance: gcc-c++-1:4.8.5-44.0.3.el7.x86_64
+#: The regex does not separate the arch from the release string
 PKG_NEVR = r"\b(?:([0-9]+):)?(\S+)-(\S+)-(\S+)\b"
+
+#: Regex that finds epoch, name, version, and release + arch in a string.  This is a variant of #: PKG_NEVR because some yum/dnf output prints the package info in this form:
+#: 32:bind-libs-9.11.23-1.fc33.i686
+PKG_ENVR = r"\b(\S+)-(?:([0-9]+):)?(\S+)-(\S+)\b"
 
 # It would be better to construct this dynamically but we don't have lru_cache
 # in Python-2.6 and modifying a global after your program initializes isn't a
